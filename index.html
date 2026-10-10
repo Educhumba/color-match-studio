@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Color Match Studio</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Color Match Studio</h1>
+          <p>Upload, compare, tune, copy.</p>
+        </div>
+        <label class="upload-button">
+          <input id="imageInput" type="file" accept="image/*" />
+          <span>Upload Image</span>
+        </label>
+      </header>
+
+      <section class="workspace" aria-label="Color matching workspace">
+        <section class="panel reference-panel" aria-labelledby="referenceTitle">
+          <div class="panel-header">
+            <h2 id="referenceTitle">Reference</h2>
+            <div class="inline-actions">
+              <button id="fitButton" type="button">Fit</button>
+              <button id="oneToOneButton" type="button">1:1</button>
+            </div>
+          </div>
+          <div id="imageStage" class="image-stage">
+            <canvas id="imageCanvas" aria-label="Uploaded image"></canvas>
+            <div id="emptyState" class="empty-state">
+              <span>Drop or upload an image</span>
+            </div>
+            <div id="loupe" class="loupe" hidden>
+              <canvas id="loupeCanvas" width="112" height="112"></canvas>
+              <span id="loupeValue">#000000</span>
+            </div>
+          </div>
+          <div class="image-tools">
+            <label>
+              Zoom
+              <input id="zoomRange" type="range" min="10" max="400" value="100" />
+            </label>
+            <button id="sampleButton" type="button" aria-pressed="false">Sample</button>
+            <span id="sampleReadout">No sample</span>
+          </div>
+        </section>
+
+        <section class="panel matcher-panel" aria-labelledby="matcherTitle">
+          <div class="panel-header">
+            <h2 id="matcherTitle">Matcher</h2>
+            <div class="inline-actions">
+              <button id="imageCompareButton" type="button" aria-pressed="true">Image Compare</button>
+              <button id="copyHexButton" type="button">Copy HEX</button>
+            </div>
+          </div>
+
+          <div id="imageCompare" class="image-compare" aria-label="Uploaded image compared with selected color">
+            <canvas id="compareCanvas"></canvas>
+            <div id="compareColor"></div>
+          </div>
+
+          <div class="compare-row">
+            <div class="compare-chip">
+              <span>Picked</span>
+              <div id="sampleChip" class="color-chip checker"></div>
+              <strong id="sampleHex">--</strong>
+            </div>
+            <div class="compare-chip">
+              <span>Match</span>
+              <div id="matchChip" class="color-chip"></div>
+              <strong id="matchHex">#d86135</strong>
+            </div>
+          </div>
+
+          <div id="colorField" class="color-field" role="slider" tabindex="0" aria-label="Saturation and brightness">
+            <div class="field-cursor" id="fieldCursor"></div>
+          </div>
+
+          <label class="control-row hue-control">
+            <span>Hue</span>
+            <input id="hueRange" type="range" min="0" max="360" value="16" />
+            <output id="hueValue">16</output>
+          </label>
+
+          <div class="slider-grid">
+            <label class="control-row">
+              <span>S</span>
+              <input id="satRange" type="range" min="0" max="100" value="75" />
+              <output id="satValue">75</output>
+            </label>
+            <label class="control-row">
+              <span>V</span>
+              <input id="valRange" type="range" min="0" max="100" value="85" />
+              <output id="valValue">85</output>
+            </label>
+          </div>
+
+          <div class="code-grid">
+            <label>
+              HEX
+              <div class="copy-field">
+                <input id="hexInput" type="text" value="#d86135" spellcheck="false" />
+                <button id="copyHexSmall" type="button">Copy</button>
+              </div>
+            </label>
+            <label>
+              RGB
+              <div class="copy-field">
+                <input id="rgbInput" type="text" value="rgb(216, 97, 53)" readonly />
+                <button id="copyRgbButton" type="button">Copy</button>
+              </div>
+            </label>
+            <label>
+              HSL
+              <div class="copy-field">
+                <input id="hslInput" type="text" value="hsl(16, 68%, 53%)" readonly />
+                <button id="copyHslButton" type="button">Copy</button>
+              </div>
+            </label>
+          </div>
+        </section>
+      </section>
+
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
