@@ -8,6 +8,7 @@ const loupeCanvas = document.querySelector("#loupeCanvas");
 const loupeCtx = loupeCanvas.getContext("2d", { willReadFrequently: true });
 const loupeValue = document.querySelector("#loupeValue");
 const zoomRange = document.querySelector("#zoomRange");
+const zoomValue = document.querySelector("#zoomValue");
 const fitButton = document.querySelector("#fitButton");
 const oneToOneButton = document.querySelector("#oneToOneButton");
 const sampleButton = document.querySelector("#sampleButton");
@@ -19,6 +20,13 @@ const imageCompare = document.querySelector("#imageCompare");
 const compareCanvas = document.querySelector("#compareCanvas");
 const compareCtx = compareCanvas.getContext("2d", { willReadFrequently: true });
 const compareColor = document.querySelector("#compareColor");
+const liveOrb = document.querySelector("#liveOrb");
+const deltaReadout = document.querySelector("#deltaReadout");
+const harmonyRow = document.querySelector("#harmonyRow");
+const historyRow = document.querySelector("#historyRow");
+const saveColorButton = document.querySelector("#saveColorButton");
+const sampleChipButton = document.querySelector("#sampleChipButton");
+const matchChipButton = document.querySelector("#matchChipButton");
 
 const colorField = document.querySelector("#colorField");
 const fieldCursor = document.querySelector("#fieldCursor");
@@ -37,10 +45,13 @@ const copyHexButton = document.querySelector("#copyHexButton");
 const copyHexSmall = document.querySelector("#copyHexSmall");
 const copyRgbButton = document.querySelector("#copyRgbButton");
 const copyHslButton = document.querySelector("#copyHslButton");
+const copyAllButton = document.querySelector("#copyAllButton");
 const toast = document.querySelector("#toast");
+const toastMessage = document.querySelector("#toastMessage");
 
 let sourceImage = null;
 let imageBitmap = null;
+let sampleSource = null;
 let imageScale = 1;
 let imageOffset = { x: 0, y: 0 };
 let isPanning = false;
@@ -48,11 +59,36 @@ let panStart = null;
 let sampleMode = false;
 let showImageCompare = true;
 let lastPointerImagePoint = null;
+let lastSampleRgb = null;
 let toastTimer = null;
 const hsv = { h: 16, s: 75, v: 85 };
+const PALETTE_KEY = "color-match-studio-palette";
+const savedColors = loadSavedColors();
+
+function loadSavedColors() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PALETTE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((value) => String(value).trim())
+      .filter((hex) => /^#?[0-9a-f]{3}$|^#?[0-9a-f]{6}$/i.test(hex))
+      .map((hex) => (hex.startsWith("#") ? hex.toLowerCase() : `#${hex.toLowerCase()}`))
+      .slice(0, 10);
+  } catch {
+    return [];
+  }
+}
+
+function persistSavedColors() {
+  localStorage.setItem(PALETTE_KEY, JSON.stringify(savedColors));
+}
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function wrapHue(h) {
+  return ((h % 360) + 360) % 360;
 }
 
 function resizeCanvasToStage() {
@@ -65,8 +101,11 @@ function resizeCanvasToStage() {
   drawCompareCanvas();
 }
 
-function fitImage() {
-  if (!imageBitmap) return;
+function fitImage({ quiet } = {}) {
+  if (!imageBitmap) {
+    if (!quiet) showToast("Upload an image before fitting the canvas.", "warn");
+    return;
+  }
   const rect = imageStage.getBoundingClientRect();
   const scale = Math.min(rect.width / imageBitmap.width, rect.height / imageBitmap.height);
   imageScale = clamp(scale, 0.1, 4);
@@ -75,7 +114,9 @@ function fitImage() {
     y: (rect.height - imageBitmap.height * imageScale) / 2,
   };
   zoomRange.value = Math.round(imageScale * 100);
+  zoomValue.value = `${zoomRange.value}%`;
   drawImageCanvas();
+  if (!quiet) showToast("Image fitted to the canvas.", "info");
 }
 
 function drawImageCanvas() {
@@ -95,7 +136,7 @@ function drawImageCanvas() {
 function drawCompareCanvas() {
   const rect = imageCompare.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  compareCanvas.width = Math.max(1, Math.round(rect.width / 2 * dpr));
+  compareCanvas.width = Math.max(1, Math.round((rect.width / 2) * dpr));
   compareCanvas.height = Math.max(1, Math.round(rect.height * dpr));
   compareCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   compareCtx.clearRect(0, 0, rect.width / 2, rect.height);
@@ -229,6 +270,124 @@ function rgbToHsl(r, g, b) {
   };
 }
 
+function colorDistance(a, b) {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return Math.round(Math.sqrt(dr * dr + dg * dg + db * db));
+}
+
+function currentRgb() {
+  return hsvToRgb(hsv.h === 360 ? 0 : hsv.h, hsv.s, hsv.v);
+}
+
+function currentCodes() {
+  const rgb = currentRgb();
+  const hex = rgbToHex(rgb.r, rgb.g, rgb.b);
+  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+  return {
+    rgb,
+    hex,
+    rgbText: `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`,
+    hslText: `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`,
+  };
+}
+
+function renderHarmony() {
+  const hues = [
+    { label: "Match", h: hsv.h },
+    { label: "Analog", h: wrapHue(hsv.h - 30) },
+    { label: "Analog", h: wrapHue(hsv.h + 30) },
+    { label: "Triad", h: wrapHue(hsv.h + 120) },
+    { label: "Triad", h: wrapHue(hsv.h - 120) },
+    { label: "Complement", h: wrapHue(hsv.h + 180) },
+  ];
+  harmonyRow.replaceChildren(
+    ...hues.map((item) => {
+      const rgb = hsvToRgb(item.h, Math.max(hsv.s, 35), Math.max(hsv.v, 45));
+      const hex = rgbToHex(rgb.r, rgb.g, rgb.b);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "swatch";
+      button.title = `${item.label} ${hex}`;
+      button.style.background = hex;
+      button.addEventListener("click", () => {
+        setHsv(rgbToHsv(rgb.r, rgb.g, rgb.b));
+        showToast(`Applied ${item.label.toLowerCase()} ${hex}`, "info");
+      });
+      return button;
+    }),
+  );
+}
+
+function renderHistory() {
+  if (!savedColors.length) {
+    const empty = document.createElement("span");
+    empty.className = "history-empty";
+    empty.textContent = "Save a color to keep it nearby. Shift-click a swatch to remove it.";
+    historyRow.replaceChildren(empty);
+    return;
+  }
+  historyRow.replaceChildren(
+    ...savedColors.map((hex) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "swatch";
+      button.title = `Restore ${hex}. Shift-click to remove.`;
+      button.style.background = hex;
+      button.addEventListener("click", (event) => {
+        if (event.shiftKey) {
+          const index = savedColors.indexOf(hex);
+          if (index >= 0) savedColors.splice(index, 1);
+          persistSavedColors();
+          renderHistory();
+          showToast(`Removed ${hex} from saved colors.`, "info");
+          return;
+        }
+        const rgb = hexToRgb(hex);
+        if (!rgb) return;
+        setHsv(rgbToHsv(rgb.r, rgb.g, rgb.b));
+        showToast(`Restored ${hex}`, "info");
+      });
+      return button;
+    }),
+  );
+}
+
+function saveCurrentColor({ quiet } = {}) {
+  const { hex } = currentCodes();
+  if (savedColors[0] === hex) {
+    if (!quiet) showToast(`${hex} is already saved.`, "info");
+    return;
+  }
+  savedColors.unshift(hex);
+  if (savedColors.length > 10) savedColors.pop();
+  persistSavedColors();
+  renderHistory();
+  if (!quiet) showToast(`Saved ${hex} to your palette.`, "success");
+}
+
+function updateDelta() {
+  if (!lastSampleRgb) {
+    deltaReadout.textContent = "Sample a pixel to compare closeness with the match color.";
+    deltaReadout.classList.remove("close");
+    return;
+  }
+  const distance = colorDistance(lastSampleRgb, currentRgb());
+  const picked = rgbToHex(lastSampleRgb.r, lastSampleRgb.g, lastSampleRgb.b);
+  const match = currentCodes().hex;
+  if (distance <= 12) {
+    deltaReadout.textContent = `Very close: ${picked} and ${match} are ${distance} apart.`;
+    deltaReadout.classList.add("close");
+  } else if (distance <= 40) {
+    deltaReadout.textContent = `Near match: ${picked} vs ${match} · distance ${distance}.`;
+    deltaReadout.classList.remove("close");
+  } else {
+    deltaReadout.textContent = `Still tuning: ${picked} vs ${match} · distance ${distance}.`;
+    deltaReadout.classList.remove("close");
+  }
+}
+
 function setHsv(next) {
   hsv.h = clamp(Math.round(next.h ?? hsv.h), 0, 360);
   hsv.s = clamp(Math.round(next.s ?? hsv.s), 0, 100);
@@ -237,10 +396,8 @@ function setHsv(next) {
 }
 
 function updateColorUi() {
-  const rgb = hsvToRgb(hsv.h === 360 ? 0 : hsv.h, hsv.s, hsv.v);
-  const hex = rgbToHex(rgb.r, rgb.g, rgb.b);
-  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-  const cssColor = `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+  const { rgb, hex, rgbText, hslText } = currentCodes();
+  const cssColor = rgbText;
 
   colorField.style.background = `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, hsl(${hsv.h}, 100%, 50%))`;
   fieldCursor.style.left = `${hsv.s}%`;
@@ -253,19 +410,25 @@ function updateColorUi() {
   valValue.value = hsv.v;
   matchChip.style.background = cssColor;
   compareColor.style.background = cssColor;
+  liveOrb.style.background = cssColor;
+  document.documentElement.style.setProperty("--live", hex);
   matchHex.textContent = hex;
   hexInput.value = hex;
-  rgbInput.value = `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
-  hslInput.value = `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
+  rgbInput.value = rgbText;
+  hslInput.value = hslText;
+  renderHarmony();
+  updateDelta();
 }
 
 function setSampleColor(rgb) {
   const hex = rgbToHex(rgb.r, rgb.g, rgb.b);
+  lastSampleRgb = rgb;
   sampleChip.classList.remove("checker");
   sampleChip.style.background = hex;
   sampleHex.textContent = hex;
-  sampleReadout.textContent = `${hex} at ${lastPointerImagePoint.x}, ${lastPointerImagePoint.y}`;
+  sampleReadout.textContent = `${hex} @ ${lastPointerImagePoint.x}, ${lastPointerImagePoint.y}`;
   drawCompareCanvas();
+  updateDelta();
 }
 
 function applySampleToMatcher(rgb) {
@@ -273,13 +436,8 @@ function applySampleToMatcher(rgb) {
 }
 
 function sampleAtImagePoint(point) {
-  if (!sourceImage || !point) return null;
-  const sampleCanvas = document.createElement("canvas");
-  sampleCanvas.width = sourceImage.naturalWidth;
-  sampleCanvas.height = sourceImage.naturalHeight;
-  const ctx = sampleCanvas.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(sourceImage, 0, 0);
-  const pixel = ctx.getImageData(point.x, point.y, 1, 1).data;
+  if (!sampleSource || !point) return null;
+  const pixel = sampleSource.ctx.getImageData(point.x, point.y, 1, 1).data;
   return { r: pixel[0], g: pixel[1], b: pixel[2], a: pixel[3] };
 }
 
@@ -319,15 +477,33 @@ function updateLoupe(point, clientX, clientY) {
 }
 
 async function loadFile(file) {
-  if (!file || !file.type.startsWith("image/")) return;
+  if (!file) {
+    showToast("No file selected.", "warn");
+    return;
+  }
+  if (!file.type.startsWith("image/")) {
+    showToast("Please drop a PNG, JPG, or WEBP image.", "warn");
+    return;
+  }
   const url = URL.createObjectURL(file);
   const img = new Image();
   img.onload = async () => {
     sourceImage = img;
     imageBitmap = await createImageBitmap(img);
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    sampleSource = { canvas, ctx };
     emptyState.hidden = true;
     drawCompareCanvas();
-    fitImage();
+    fitImage({ quiet: true });
+    URL.revokeObjectURL(url);
+    showToast(`Loaded ${file.name}. Press Sample, then click a pixel.`, "success");
+  };
+  img.onerror = () => {
+    showToast("Could not read that image.", "warn");
     URL.revokeObjectURL(url);
   };
   img.src = url;
@@ -340,21 +516,33 @@ function setColorFromField(clientX, clientY) {
   setHsv({ s, v });
 }
 
-function showToast(message) {
+function showToast(message, tone = "info") {
   window.clearTimeout(toastTimer);
-  toast.textContent = message;
-  toast.classList.add("show");
-  toastTimer = window.setTimeout(() => toast.classList.remove("show"), 1500);
+  toastMessage.textContent = message;
+  toast.className = `toast show ${tone}`;
+  toastTimer = window.setTimeout(() => toast.classList.remove("show"), 3200);
 }
 
-async function copyText(value) {
+async function copyText(value, label = value) {
   try {
     await navigator.clipboard.writeText(value);
-    showToast(`Copied ${value}`);
+    showToast(`Copied ${label}`, "success");
   } catch {
     hexInput.select();
     document.execCommand("copy");
-    showToast("Copied");
+    showToast(`Copied ${label}`, "success");
+  }
+}
+
+function setSampleMode(next) {
+  sampleMode = next;
+  sampleButton.setAttribute("aria-pressed", String(sampleMode));
+  sampleButton.textContent = sampleMode ? "Sampling" : "Sample";
+  imageStage.classList.toggle("sampling", sampleMode);
+  if (sampleMode) {
+    showToast("Sampling on — click a pixel to capture it.", "info");
+  } else {
+    showToast("Sampling paused.", "info");
   }
 }
 
@@ -362,10 +550,16 @@ imageInput.addEventListener("change", (event) => loadFile(event.target.files[0])
 
 imageStage.addEventListener("dragover", (event) => {
   event.preventDefault();
+  imageStage.classList.add("drag-over");
+});
+
+imageStage.addEventListener("dragleave", () => {
+  imageStage.classList.remove("drag-over");
 });
 
 imageStage.addEventListener("drop", (event) => {
   event.preventDefault();
+  imageStage.classList.remove("drag-over");
   loadFile(event.dataTransfer.files[0]);
 });
 
@@ -376,9 +570,18 @@ imageStage.addEventListener("pointerdown", (event) => {
     const rgb = sampleAtImagePoint(point);
     setSampleColor(rgb);
     applySampleToMatcher(rgb);
+    saveCurrentColor({ quiet: true });
+    showToast(`Sampled ${rgbToHex(rgb.r, rgb.g, rgb.b)} from the image.`, "success");
     return;
   }
-  if (!imageBitmap) return;
+  if (sampleMode && !point) {
+    showToast("Click on the image pixels, not the empty canvas.", "warn");
+    return;
+  }
+  if (!imageBitmap) {
+    showToast("Upload an image to pan or sample.", "warn");
+    return;
+  }
   isPanning = true;
   imageStage.setPointerCapture(event.pointerId);
   panStart = {
@@ -412,6 +615,7 @@ imageStage.addEventListener("pointerup", (event) => {
 });
 
 zoomRange.addEventListener("input", () => {
+  zoomValue.value = `${zoomRange.value}%`;
   if (!imageBitmap) return;
   const rect = imageStage.getBoundingClientRect();
   const oldScale = imageScale;
@@ -425,27 +629,35 @@ zoomRange.addEventListener("input", () => {
 fitButton.addEventListener("click", fitImage);
 
 oneToOneButton.addEventListener("click", () => {
-  if (!imageBitmap) return;
+  if (!imageBitmap) {
+    showToast("Upload an image before using 1:1.", "warn");
+    return;
+  }
   const rect = imageStage.getBoundingClientRect();
   imageScale = 1;
   zoomRange.value = 100;
+  zoomValue.value = "100%";
   imageOffset = {
     x: (rect.width - imageBitmap.width) / 2,
     y: (rect.height - imageBitmap.height) / 2,
   };
   drawImageCanvas();
+  showToast("Zoom set to actual pixels (1:1).", "info");
 });
 
 sampleButton.addEventListener("click", () => {
-  sampleMode = !sampleMode;
-  sampleButton.setAttribute("aria-pressed", String(sampleMode));
-  sampleButton.textContent = sampleMode ? "Sampling" : "Sample";
+  if (!imageBitmap && !sampleMode) {
+    showToast("Upload an image first, then sample a pixel.", "warn");
+    return;
+  }
+  setSampleMode(!sampleMode);
 });
 
 imageCompareButton.addEventListener("click", () => {
   showImageCompare = !showImageCompare;
   imageCompare.hidden = !showImageCompare;
   imageCompareButton.setAttribute("aria-pressed", String(showImageCompare));
+  showToast(showImageCompare ? "Image compare is visible." : "Image compare is hidden.", "info");
 });
 
 colorField.addEventListener("pointerdown", (event) => {
@@ -462,8 +674,8 @@ colorField.addEventListener("keydown", (event) => {
   const step = event.shiftKey ? 10 : 1;
   if (event.key === "ArrowRight") setHsv({ s: hsv.s + step });
   else if (event.key === "ArrowLeft") setHsv({ s: hsv.s - step });
-  else if (event.key === "ArrowUp") setHsv({ v: hsv.v + step });
   else if (event.key === "ArrowDown") setHsv({ v: hsv.v - step });
+  else if (event.key === "ArrowUp") setHsv({ v: hsv.v + step });
   else return;
   event.preventDefault();
 });
@@ -476,18 +688,46 @@ hexInput.addEventListener("change", () => {
   const rgb = hexToRgb(hexInput.value);
   if (!rgb) {
     hexInput.value = matchHex.textContent;
-    showToast("Invalid HEX");
+    showToast("That HEX is invalid. Restored the last good value.", "warn");
     return;
   }
   setHsv(rgbToHsv(rgb.r, rgb.g, rgb.b));
+  showToast(`Match set to ${rgbToHex(rgb.r, rgb.g, rgb.b)}.`, "success");
 });
 
-copyHexButton.addEventListener("click", () => copyText(hexInput.value));
-copyHexSmall.addEventListener("click", () => copyText(hexInput.value));
-copyRgbButton.addEventListener("click", () => copyText(rgbInput.value));
-copyHslButton.addEventListener("click", () => copyText(hslInput.value));
+copyHexButton.addEventListener("click", () => copyText(hexInput.value, hexInput.value));
+copyHexSmall.addEventListener("click", () => copyText(hexInput.value, hexInput.value));
+copyRgbButton.addEventListener("click", () => copyText(rgbInput.value, rgbInput.value));
+copyHslButton.addEventListener("click", () => copyText(hslInput.value, hslInput.value));
+copyAllButton.addEventListener("click", () => {
+  const { hex, rgbText, hslText } = currentCodes();
+  copyText(`${hex}\n${rgbText}\n${hslText}`, "HEX, RGB, and HSL");
+});
+saveColorButton.addEventListener("click", () => saveCurrentColor());
+sampleChipButton.addEventListener("click", () => {
+  if (sampleHex.textContent === "--") {
+    showToast("No sampled color yet.", "warn");
+    return;
+  }
+  copyText(sampleHex.textContent, sampleHex.textContent);
+});
+matchChipButton.addEventListener("click", () => copyText(matchHex.textContent, matchHex.textContent));
+
+window.addEventListener("keydown", (event) => {
+  if (event.target.matches("input")) return;
+  if (event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    sampleButton.click();
+  }
+  if (event.key.toLowerCase() === "c" && (event.ctrlKey || event.metaKey) === false && !event.shiftKey) {
+    event.preventDefault();
+    copyText(hexInput.value, hexInput.value);
+  }
+});
 
 window.addEventListener("resize", resizeCanvasToStage);
 
 resizeCanvasToStage();
 updateColorUi();
+renderHistory();
+showToast("Studio is ready. Upload an image or tune a color.", "info");
